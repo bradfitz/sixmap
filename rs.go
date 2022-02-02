@@ -28,10 +28,10 @@ func (r route) color() color.NRGBA {
 	if r&reserved != 0 {
 		return color.NRGBA{140, 140, 140, 255}
 	}
-	if r&isGov != 0 {
-		return color.NRGBA{232, 218, 176, 255}
-	}
 	if r&onSIX != 0 {
+		if r&isGov != 0 {
+			return color.NRGBA{161, 188, 237, 255}
+		}
 		return color.NRGBA{0, 44, 201, 255}
 	}
 	return color.NRGBA{235, 235, 247, 255}
@@ -39,9 +39,9 @@ func (r route) color() color.NRGBA {
 
 type routeMap [1 << 24]route
 
-func (m *routeMap) stats() (six24, total24 int) {
+func (m *routeMap) stats(skip route) (six24, total24 int) {
 	for _, r := range m {
-		if r&reserved != 0 {
+		if r&skip != 0 {
 			continue
 		}
 		total24++
@@ -112,9 +112,9 @@ func main() {
 	bs.Scan() // skip first line
 	rm := newRouteMap()
 	for bs.Scan() {
-		s := bs.Text()
-		i := strings.Index(s, "via ")
-		s = strings.TrimSpace(s[:i])
+		line := bs.Text()
+		i := strings.Index(line, "via ")
+		s := strings.TrimSpace(line[:i])
 		ipp, err := netaddr.ParseIPPrefix(s)
 		if err != nil {
 			log.Fatalf("bogus line %q: %v", s, err)
@@ -123,11 +123,18 @@ func main() {
 		if bits > 24 {
 			continue
 		}
+		if bits == 8 {
+			// Turns out these are all US gov/DoD/army/etc stuff.
+			rm.setPrefix(ipp, isGov)
+		}
 		rm.setPrefix(ipp, onSIX)
 	}
 
-	six24, total24 := rm.stats()
+	six24, total24 := rm.stats(reserved)
 	fmt.Printf("num /24s: %v of %v (%0.02f%%)\n", six24, total24, 100.0*float64(six24)/float64(total24))
+
+	six24, total24 = rm.stats(reserved | isGov)
+	fmt.Printf("num /24s non-gov: %v of %v (%0.02f%%)\n", six24, total24, 100.0*float64(six24)/float64(total24))
 
 	log.Printf("making image..")
 	im := image.NewNRGBA(image.Rect(0, 0, 1<<12, 1<<12))
