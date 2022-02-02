@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -18,10 +19,11 @@ import (
 type route uint8
 
 const (
-	user route = 1 << iota
+	haveRoute route = 1 << iota
 	isGov
 	onSIX
 	reserved
+	isHE
 )
 
 func (r route) color() color.NRGBA {
@@ -34,12 +36,18 @@ func (r route) color() color.NRGBA {
 		}
 		return color.NRGBA{0, 44, 201, 255}
 	}
+	if r&haveRoute != 0 {
+		if r&isHE != 0 {
+			return color.NRGBA{86, 232, 125, 255}
+		}
+		return color.NRGBA{255, 0, 0, 255}
+	}
 	return color.NRGBA{235, 235, 247, 255}
 }
 
 type routeMap [1 << 24]route
 
-func (m *routeMap) stats(skip route) (six24, total24 int) {
+func (m *routeMap) stats(skip route) (six24, reachable, total24 int) {
 	for _, r := range m {
 		if r&skip != 0 {
 			continue
@@ -47,6 +55,9 @@ func (m *routeMap) stats(skip route) (six24, total24 int) {
 		total24++
 		if r&onSIX != 0 {
 			six24++
+		}
+		if r&haveRoute != 0 {
+			reachable++
 		}
 	}
 	return
@@ -99,7 +110,7 @@ func routeNum(ip netaddr.IP) int {
 	return int(n >> 8)
 }
 
-func main() {
+func addRouteServers(rm *routeMap) {
 	res, err := http.Get("https://www.seattleix.net/rs/rs2.1500.v4.unique.txt")
 	if err != nil {
 		log.Fatal(err)
@@ -110,7 +121,6 @@ func main() {
 	}
 	bs := bufio.NewScanner(res.Body)
 	bs.Scan() // skip first line
-	rm := newRouteMap()
 	for bs.Scan() {
 		line := bs.Text()
 		i := strings.Index(line, "via ")
@@ -129,11 +139,58 @@ func main() {
 		}
 		rm.setPrefix(ipp, onSIX)
 	}
+}
 
-	six24, total24 := rm.stats(reserved)
-	fmt.Printf("num /24s: %v of %v (%0.02f%%)\n", six24, total24, 100.0*float64(six24)/float64(total24))
+func addReachable(rm *routeMap, filename string) {
+	f, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	bs := bufio.NewScanner(f)
+	for bs.Scan() {
+		line := strings.TrimSpace(bs.Text())
+		i := strings.Index(line, "via ")
+		if i == -1 {
+			continue
+		}
+		s := strings.TrimSpace(line[:i])
+		if !strings.Contains(s, "/") {
+			continue
+		}
+		ipp, err := netaddr.ParseIPPrefix(s)
+		if err != nil {
+			log.Fatalf("bogus line %q: %v", s, err)
+		}
+		bits := ipp.Bits()
+		if bits > 24 {
+			continue
+		}
+		rm.setPrefix(ipp, haveRoute)
+		if strings.HasSuffix(line, "realm 6939") {
+			rm.setPrefix(ipp, isHE)
+		}
+	}
+}
 
-	six24, total24 = rm.stats(reserved | isGov)
+var (
+	route4 = flag.String("v4routes", "", "if non-empty, text file to Linux ip -4 route output to add")
+)
+
+func main() {
+	flag.Parse()
+	rm := newRouteMap()
+
+	if *route4 != "" {
+		addReachable(rm, *route4)
+	}
+	addRouteServers(rm)
+
+	six24, reachable, total24 := rm.stats(reserved)
+	fmt.Printf("num /24s   six: %v of %v (%0.02f%%)\n", six24, total24, 100.0*float64(six24)/float64(total24))
+	fmt.Printf("num /24s reach: %v of %v (%0.02f%%)\n", reachable, total24, 100.0*float64(reachable)/float64(total24))
+
+	six24, _, total24 = rm.stats(reserved | isGov)
 	fmt.Printf("num /24s non-gov: %v of %v (%0.02f%%)\n", six24, total24, 100.0*float64(six24)/float64(total24))
 
 	log.Printf("making image..")
