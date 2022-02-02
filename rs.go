@@ -96,7 +96,6 @@ func newRouteMap() *routeMap {
 		"169.254.0.0/16", // link local
 
 		"198.18.0.0/15",  // benchmarking
-		"169.254.0.0/16", // link local
 
 	} {
 		m.setPrefix(netaddr.MustParseIPPrefix(s), reserved)
@@ -218,7 +217,7 @@ func hilbertXY(slash24Prefix uint32) (x, y uint32) {
 		row := 4*state | ((slash24Prefix >> i) & 3)
 		x = (x << 1) | ((0x936C >> row) & 1)
 		y = (y << 1) | ((0x39C6 >> row) & 1)
-		state = (0x3E6B94C1 >> 2 * row) & 3
+		state = (0x3E6B94C1 >> (2 * row)) & 3
 	}
 	return
 }
