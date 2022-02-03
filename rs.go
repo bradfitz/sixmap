@@ -20,10 +20,12 @@ type route uint8
 
 const (
 	haveRoute route = 1 << iota
+	isTransit
 	isGov
 	onSIX
 	reserved
 	isHE
+	isCloudflare
 )
 
 func (r route) color() color.NRGBA {
@@ -36,10 +38,16 @@ func (r route) color() color.NRGBA {
 		}
 		return color.NRGBA{0, 44, 201, 255}
 	}
+	if r&isTransit != 0 {
+		return color.NRGBA{244, 252, 3, 255}
+	}
+	if r&isCloudflare != 0 {
+		return color.NRGBA{244, 129, 32, 255}
+	}
+	if r&isHE != 0 {
+		return color.NRGBA{86, 232, 125, 255}
+	}
 	if r&haveRoute != 0 {
-		if r&isHE != 0 {
-			return color.NRGBA{86, 232, 125, 255}
-		}
 		return color.NRGBA{255, 0, 0, 255}
 	}
 	return color.NRGBA{235, 235, 247, 255}
@@ -95,7 +103,7 @@ func newRouteMap() *routeMap {
 
 		"169.254.0.0/16", // link local
 
-		"198.18.0.0/15",  // benchmarking
+		"198.18.0.0/15", // benchmarking
 
 	} {
 		m.setPrefix(netaddr.MustParseIPPrefix(s), reserved)
@@ -166,14 +174,48 @@ func addReachable(rm *routeMap, filename string) {
 			continue
 		}
 		rm.setPrefix(ipp, haveRoute)
-		if strings.HasSuffix(line, "realm 6939") {
-			rm.setPrefix(ipp, isHE)
+	}
+}
+
+func addBirdRoutes(rm *routeMap, filename string) {
+	f, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	bs := bufio.NewScanner(f)
+	for bs.Scan() {
+		line := strings.TrimSpace(bs.Text())
+		if !strings.Contains(line, " * ") {
+			continue
+		}
+		i := strings.Index(line, "via ")
+		if i == -1 {
+			continue
+		}
+		s := strings.TrimSpace(line[:i])
+		ipp, err := netaddr.ParseIPPrefix(s)
+		if err != nil || ipp.Bits() > 24 || ipp.Bits() == 0 {
+			continue
+		}
+		var bits route
+		switch {
+		case strings.Contains(line, "[doof_transit "):
+			bits = isTransit
+		case strings.Contains(line, "[he "):
+			bits = isHE
+		case strings.Contains(line, "[cloudflare "):
+			bits = isCloudflare
+		}
+		if bits != 0 {
+			rm.setPrefix(ipp, bits)
 		}
 	}
 }
 
 var (
-	route4 = flag.String("v4routes", "", "if non-empty, text file to Linux ip -4 route output to add")
+	route4    = flag.String("v4routes", "", "if non-empty, text file to Linux ip -4 route output to add; this flag is very particular to my setup. Modify code as needed for your setup.")
+	routeBird = flag.String("bird-routes", "", "if non-empty, bird 'show routes' output to parse; this flag is very particular to my setup. Modify code as needed for your setup.")
 )
 
 func main() {
@@ -182,6 +224,9 @@ func main() {
 
 	if *route4 != "" {
 		addReachable(rm, *route4)
+	}
+	if *routeBird != "" {
+		addBirdRoutes(rm, *routeBird)
 	}
 	addRouteServers(rm)
 
